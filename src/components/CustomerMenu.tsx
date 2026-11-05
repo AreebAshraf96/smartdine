@@ -3,120 +3,167 @@
 
 import { useMemo, useState } from "react";
 
+type Category = {
+  id: string;
+  name: string;
+  sort_order?: number | null;
+};
+
 type MenuItem = {
   id: string;
-  category_id: string;
+  category_id: string | null;
   name: string;
   description: string | null;
   price: number;
   is_available: boolean;
 };
 
-type Category = {
-  id: string;
-  name: string;
-  sort_order: number;
-};
-
 type Props = {
   restaurantName: string;
-  items: MenuItem[];
   categories: Category[];
+  items: MenuItem[];
+  qrId?: string;
 };
 
-type Cart = Record<string, number>;
-type View = "menu" | "cart" | "checkout";
+type Screen = "menu" | "cart" | "checkout" | "success";
+
+type OrderResult = {
+  orderId: string;
+  total: number;
+  status: string;
+  replayed?: boolean;
+};
 
 export default function CustomerMenu({
   restaurantName,
-  items,
   categories,
+  items,
+  qrId,
 }: Props) {
-  const [cart, setCart] = useState<Cart>({});
+  const [screen, setScreen] = useState<Screen>("menu");
   const [selectedCategory, setSelectedCategory] =
     useState("all");
-  const [view, setView] = useState<View>("menu");
-  const [specialInstructions, setSpecialInstructions] =
-    useState("");
+
+  const [cart, setCart] = useState<Record<string, number>>(
+    {}
+  );
+
+  const [instructions, setInstructions] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [orderResult, setOrderResult] =
+    useState<OrderResult | null>(null);
+
+  const [idempotencyKey, setIdempotencyKey] =
+    useState<string | null>(null);
 
   const formatPrice = (price: number) =>
-    `PKR ${price.toLocaleString("en-PK", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    })}`;
+    `PKR ${price.toLocaleString("en-PK")}`;
 
-  const addToCart = (id: string) => {
-    const item = items.find((i) => i.id === id);
+  // Sort categories
+  const sortedCategories = useMemo(() => {
+    return [...categories].sort(
+      (a, b) =>
+        (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
+  }, [categories]);
 
-    if (!item || !item.is_available) return;
+  // Filter menu by selected category
+  const visibleItems = useMemo(() => {
+    if (selectedCategory === "all") {
+      return items;
+    }
 
-    setCart((previous) => ({
-      ...previous,
-      [id]: (previous[id] ?? 0) + 1,
-    }));
-  };
+    return items.filter(
+      (item) => item.category_id === selectedCategory
+    );
+  }, [items, selectedCategory]);
 
-  const removeFromCart = (id: string) => {
-    setCart((previous) => {
-      const updated = { ...previous };
-      const quantity = (updated[id] ?? 0) - 1;
+  // Read cart items from current menu data
+  const cartItems = useMemo(() => {
+    return items
+      .filter((item) => (cart[item.id] ?? 0) > 0)
+      .map((item) => ({
+        ...item,
+        quantity: cart[item.id],
+      }));
+  }, [items, cart]);
 
-      if (quantity <= 0) {
-        delete updated[id];
-      } else {
-        updated[id] = quantity;
-      }
-
-      return updated;
-    });
-  };
-
-  const filteredItems = useMemo(
-    () =>
-      selectedCategory === "all"
-        ? items
-        : items.filter(
-            (item) => item.category_id === selectedCategory
-          ),
-    [items, selectedCategory]
-  );
-
-  const cartItems = useMemo(
-    () =>
-      items.filter(
-        (item) =>
-          item.is_available && (cart[item.id] ?? 0) > 0
-      ),
-    [items, cart]
-  );
-
-  const itemCount = cartItems.reduce(
-    (sum, item) => sum + cart[item.id],
+  const totalQuantity = cartItems.reduce(
+    (sum, item) => sum + item.quantity,
     0
   );
 
   const subtotal = cartItems.reduce(
-    (sum, item) => sum + item.price * cart[item.id],
+    (sum, item) =>
+      sum + item.price * item.quantity,
     0
   );
 
-  const hasUnavailableItems = items.some(
-    (item) => !item.is_available && (cart[item.id] ?? 0) > 0
+  const unavailableItems = cartItems.filter(
+    (item) => !item.is_available
   );
 
-  const clearCart = () => {
-    setCart({});
-    setSpecialInstructions("");
-    setView("menu");
-  };
+  // Update cart safely
+  function updateQuantity(
+    item: MenuItem,
+    change: number
+  ) {
+    if (!item.is_available && change > 0) {
+      return;
+    }
 
-  const quantityControls = (item: MenuItem) => {
+    if (submitting) return;
+
+    setCart((previous) => {
+      const current = previous[item.id] ?? 0;
+      const next = Math.max(
+        0,
+        Math.min(10, current + change)
+      );
+
+      const updated = { ...previous };
+
+      if (next === 0) {
+        delete updated[item.id];
+      } else {
+        updated[item.id] = next;
+      }
+
+      return updated;
+    });
+
+    setIdempotencyKey(null);
+    setError("");
+  }
+
+  function removeItem(itemId: string) {
+    if (submitting) return;
+
+    setCart((previous) => {
+      const updated = { ...previous };
+      delete updated[itemId];
+      return updated;
+    });
+
+    setIdempotencyKey(null);
+    setError("");
+  }
+
+  function goTo(nextScreen: Screen) {
+    setError("");
+    setScreen(nextScreen);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // Reusable quantity buttons
+  function quantityControls(item: MenuItem) {
     const quantity = cart[item.id] ?? 0;
 
     if (!item.is_available) {
       return (
-        <span className="text-sm font-medium text-red-600">
-          Sold out
+        <span className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+          Out of Stock
         </span>
       );
     }
@@ -125,8 +172,9 @@ export default function CustomerMenu({
       return (
         <button
           type="button"
-          onClick={() => addToCart(item.id)}
-          className="rounded-lg bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+          disabled={submitting}
+          onClick={() => updateQuantity(item, 1)}
+          className="rounded-lg bg-black px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
         >
           + Add
         </button>
@@ -137,9 +185,10 @@ export default function CustomerMenu({
       <div className="flex items-center gap-3">
         <button
           type="button"
-          onClick={() => removeFromCart(item.id)}
+          disabled={submitting}
+          onClick={() => updateQuantity(item, -1)}
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg disabled:opacity-50"
           aria-label={`Remove one ${item.name}`}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-100"
         >
           −
         </button>
@@ -150,309 +199,534 @@ export default function CustomerMenu({
 
         <button
           type="button"
-          onClick={() => addToCart(item.id)}
+          disabled={submitting || quantity >= 10}
+          onClick={() => updateQuantity(item, 1)}
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-lg disabled:opacity-50"
           aria-label={`Add one ${item.name}`}
-          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 hover:bg-gray-100"
         >
           +
         </button>
       </div>
     );
-  };
+  }
+
+  // Submit order to secure Next.js API
+  async function placeOrder() {
+    if (submitting) return;
+
+    setError("");
+
+    if (!qrId) {
+      setError(
+        "Please scan your table QR code before placing an order."
+      );
+      return;
+    }
+
+    if (cartItems.length === 0) {
+      setError("Your cart is empty.");
+      return;
+    }
+
+    if (unavailableItems.length > 0) {
+      setError(
+        "Some items are out of stock. Please remove them."
+      );
+      return;
+    }
+
+    if (totalQuantity > 50) {
+      setError(
+        "Maximum 50 items are allowed per order."
+      );
+      return;
+    }
+
+    setSubmitting(true);
+
+    // Reuse the same key if a request is retried.
+    const key =
+      idempotencyKey ?? crypto.randomUUID();
+
+    setIdempotencyKey(key);
+
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          qrId,
+          idempotencyKey: key,
+          instructions: instructions.trim(),
+          items: cartItems.map((item) => ({
+            id: item.id,
+            quantity: item.quantity,
+          })),
+        }),
+      });
+
+      const responseText = await response.text();
+
+      let result: Record<string, unknown> = {};
+
+      if (responseText.trim()) {
+        try {
+          result = JSON.parse(
+            responseText
+          ) as Record<string, unknown>;
+        } catch {
+          throw new Error(
+            `Invalid server response (HTTP ${response.status})`
+          );
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof result.error === "string"
+            ? result.error
+            : `Order failed (HTTP ${response.status})`
+        );
+      }
+
+      if (typeof result.orderId !== "string") {
+        throw new Error(
+          "The server did not return an order ID."
+        );
+      }
+
+      setOrderResult({
+        orderId: result.orderId,
+        total:
+          typeof result.total === "number"
+            ? result.total
+            : subtotal,
+        status:
+          typeof result.status === "string"
+            ? result.status
+            : "received",
+        replayed: Boolean(result.replayed),
+      });
+
+      setCart({});
+      setInstructions("");
+      setIdempotencyKey(null);
+
+      goTo("success");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to place your order."
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <main className="min-h-screen bg-gray-50 pb-32 text-gray-900">
+    <main className="min-h-screen bg-gray-50 pb-28 text-gray-900">
       <div className="mx-auto max-w-3xl px-4 py-6">
-        {/* Restaurant Header */}
-        <header className="mb-6">
-          <h1 className="text-3xl font-bold">
+        {/* Restaurant heading */}
+        <header className="mb-7">
+          <h1 className="text-2xl font-bold">
             {restaurantName}
           </h1>
+
           <p className="mt-1 text-sm text-gray-600">
             SmartDine Digital Ordering
           </p>
         </header>
 
-        {/* MENU VIEW */}
-        {view === "menu" && (
+        {/* MENU */}
+        {screen === "menu" && (
           <section>
-            <h2 className="mb-4 text-2xl font-semibold">
+            <h2 className="mb-4 text-xl font-bold">
               Our Menu
             </h2>
 
-            {/* Category Filters */}
-            <nav
-              aria-label="Menu categories"
-              className="mb-6 flex gap-2 overflow-x-auto pb-3"
-            >
+            {/* Category filters */}
+            <div className="mb-6 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setSelectedCategory("all")}
-                className={`shrink-0 rounded-full px-5 py-2 text-sm ${
+                onClick={() =>
+                  setSelectedCategory("all")
+                }
+                className={`rounded-full border px-4 py-2 text-sm font-medium ${
                   selectedCategory === "all"
-                    ? "bg-black text-white"
-                    : "border bg-white text-gray-900"
+                    ? "border-black bg-black text-white"
+                    : "border-gray-300 bg-white"
                 }`}
               >
                 All
               </button>
 
-              {categories.map((category) => (
+              {sortedCategories.map((category) => (
                 <button
                   key={category.id}
                   type="button"
                   onClick={() =>
                     setSelectedCategory(category.id)
                   }
-                  className={`shrink-0 rounded-full px-5 py-2 text-sm ${
+                  className={`rounded-full border px-4 py-2 text-sm font-medium ${
                     selectedCategory === category.id
-                      ? "bg-black text-white"
-                      : "border bg-white text-gray-900"
+                      ? "border-black bg-black text-white"
+                      : "border-gray-300 bg-white"
                   }`}
                 >
                   {category.name}
                 </button>
               ))}
-            </nav>
+            </div>
 
-            <div className="space-y-4">
-              {filteredItems.length === 0 && (
-                <p className="rounded-xl bg-white p-6 text-gray-600">
-                  No items found in this category.
-                </p>
-              )}
-
-              {filteredItems.map((item) => (
+            {/* Menu cards */}
+            <div className="space-y-3">
+              {visibleItems.map((item) => (
                 <article
                   key={item.id}
-                  className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
+                  className={`rounded-xl border bg-white p-4 shadow-sm ${
+                    !item.is_available
+                      ? "border-gray-200 opacity-75"
+                      : "border-gray-200"
+                  }`}
                 >
-                  <h3 className="text-lg font-semibold">
-                    {item.name}
-                  </h3>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <h3 className="font-semibold">
+                        {item.name}
+                      </h3>
 
-                  {item.description && (
-                    <p className="mt-1 text-sm text-gray-600">
-                      {item.description}
-                    </p>
-                  )}
+                      {item.description && (
+                        <p className="mt-1 text-sm text-gray-600">
+                          {item.description}
+                        </p>
+                      )}
+
+                      {!item.is_available && (
+                        <p className="mt-2 text-xs font-semibold text-red-600">
+                          Currently unavailable
+                        </p>
+                      )}
+                    </div>
+                  </div>
 
                   <div className="mt-4 flex items-center justify-between gap-3">
-                    <span className="font-semibold">
+                    <p className="font-semibold">
                       {formatPrice(item.price)}
-                    </span>
+                    </p>
+
                     {quantityControls(item)}
                   </div>
                 </article>
               ))}
+
+              {visibleItems.length === 0 && (
+                <div className="rounded-xl border bg-white p-8 text-center text-gray-600">
+                  No menu items in this category.
+                </div>
+              )}
             </div>
           </section>
         )}
 
-        {/* CART VIEW */}
-        {view === "cart" && (
+        {/* CART */}
+        {screen === "cart" && (
           <section>
             <button
               type="button"
-              onClick={() => setView("menu")}
-              className="mb-5 font-medium text-gray-600 hover:text-black"
+              onClick={() => goTo("menu")}
+              className="mb-5 text-sm text-gray-600"
             >
-              ← Continue Shopping
+              ← Back to menu
             </button>
 
-            <h2 className="mb-5 text-2xl font-bold">
+            <h2 className="mb-5 text-xl font-bold">
               Your Cart
             </h2>
 
-            {hasUnavailableItems && (
-              <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
-                Some selected items are unavailable and are
-                excluded from your total.
-              </p>
-            )}
-
             {cartItems.length === 0 ? (
-              <div className="rounded-xl bg-white p-8 text-center">
-                <p className="mb-5 text-gray-600">
-                  Your cart is empty.
-                </p>
+              <div className="rounded-xl border bg-white p-8 text-center">
+                <p>Your cart is empty.</p>
 
                 <button
                   type="button"
-                  onClick={() => setView("menu")}
-                  className="rounded-lg bg-black px-5 py-3 text-white"
+                  onClick={() => goTo("menu")}
+                  className="mt-4 rounded-lg bg-black px-5 py-3 text-sm text-white"
                 >
                   Browse Menu
                 </button>
               </div>
             ) : (
-              <>
-                <div className="space-y-3">
-                  {cartItems.map((item) => (
-                    <div
-                      key={item.id}
-                      className="rounded-xl border bg-white p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h3 className="font-semibold">
-                            {item.name}
-                          </h3>
-                          <p className="mt-1 text-sm text-gray-600">
-                            {formatPrice(item.price)} each
-                          </p>
-                          <p className="mt-2 font-semibold">
-                            {formatPrice(
-                              item.price * cart[item.id]
-                            )}
-                          </p>
-                        </div>
+              <div className="space-y-3">
+                {cartItems.map((item) => (
+                  <article
+                    key={item.id}
+                    className="rounded-xl border bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold">
+                          {item.name}
+                        </h3>
 
-                        {quantityControls(item)}
+                        <p className="mt-1 text-sm text-gray-600">
+                          {formatPrice(item.price)} each
+                        </p>
+
+                        {!item.is_available && (
+                          <p className="mt-2 text-sm font-semibold text-red-600">
+                            Out of Stock — remove this item
+                          </p>
+                        )}
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => removeItem(item.id)}
+                        className="text-sm text-red-600"
+                      >
+                        Remove
+                      </button>
                     </div>
-                  ))}
-                </div>
 
-                <button
-                  type="button"
-                  onClick={clearCart}
-                  className="mt-4 text-sm font-medium text-red-600"
-                >
-                  Clear Cart
-                </button>
+                    <div className="mt-4 flex items-center justify-between">
+                      {quantityControls(item)}
 
-                <div className="mt-6 rounded-xl border bg-white p-5">
-                  <div className="flex justify-between text-lg font-bold">
+                      <p className="font-semibold">
+                        {formatPrice(
+                          item.price * item.quantity
+                        )}
+                      </p>
+                    </div>
+                  </article>
+                ))}
+
+                <div className="rounded-xl border bg-white p-4">
+                  <div className="flex justify-between font-bold">
                     <span>Subtotal</span>
                     <span>{formatPrice(subtotal)}</span>
                   </div>
+
                   <p className="mt-2 text-xs text-gray-500">
-                    Taxes or service charges are not included
-                    in this demo.
+                    Taxes and service charges are not
+                    included in this demo.
                   </p>
                 </div>
-              </>
+              </div>
             )}
           </section>
         )}
 
-        {/* CHECKOUT VIEW */}
-        {view === "checkout" && (
+        {/* CHECKOUT */}
+        {screen === "checkout" && (
           <section>
             <button
               type="button"
-              onClick={() => setView("cart")}
-              className="mb-5 font-medium text-gray-600 hover:text-black"
+              onClick={() => goTo("cart")}
+              className="mb-5 text-sm text-gray-600"
             >
-              ← Back to Cart
+              ← Back to cart
             </button>
 
-            <h2 className="mb-5 text-2xl font-bold">
+            <h2 className="mb-5 text-xl font-bold">
               Review Your Order
             </h2>
 
-            <div className="rounded-xl border bg-white p-5">
-              <h3 className="mb-4 text-lg font-semibold">
-                Order Summary
-              </h3>
+            <div className="rounded-xl border bg-white p-4">
+              <div className="space-y-3">
+                {cartItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex justify-between gap-3 text-sm"
+                  >
+                    <span>
+                      {item.name} × {item.quantity}
+                    </span>
 
-              {cartItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="mb-3 flex justify-between gap-3 text-sm"
-                >
-                  <span>
-                    {item.name} × {cart[item.id]}
-                  </span>
-                  <span className="font-medium">
-                    {formatPrice(
-                      item.price * cart[item.id]
-                    )}
-                  </span>
-                </div>
-              ))}
+                    <span>
+                      {formatPrice(
+                        item.price * item.quantity
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
 
-              <div className="mt-4 flex justify-between border-t pt-4 text-lg font-bold">
+              <div className="mt-4 flex justify-between border-t pt-4 font-bold">
                 <span>Subtotal</span>
                 <span>{formatPrice(subtotal)}</span>
               </div>
+
+              <p className="mt-2 text-xs text-gray-500">
+                Taxes and service charges are not
+                included in this demo.
+              </p>
             </div>
 
-            <div className="mt-5 rounded-xl border bg-white p-5">
+            <div className="mt-4 rounded-xl border bg-white p-4">
               <label
-                htmlFor="specialInstructions"
-                className="mb-3 block font-semibold"
+                htmlFor="instructions"
+                className="font-semibold"
               >
                 Special Instructions
               </label>
 
               <textarea
-                id="specialInstructions"
-                value={specialInstructions}
+                id="instructions"
+                value={instructions}
+                onChange={(event) => {
+                  setInstructions(event.target.value);
+                  setIdempotencyKey(null);
+                }}
                 maxLength={500}
-                onChange={(event) =>
-                  setSpecialInstructions(event.target.value)
-                }
-                placeholder="e.g. Less spicy, no onions, extra sauce..."
-                rows={4}
-                className="w-full resize-y rounded-lg border border-gray-300 p-3 text-sm outline-none focus:border-black"
+                placeholder="e.g. Less spicy, no onions..."
+                className="mt-3 min-h-24 w-full rounded-lg border border-gray-300 p-3 text-sm"
               />
 
-              <p className="mt-2 text-xs text-gray-500">
-                Optional kitchen instructions.
+              <p className="mt-1 text-right text-xs text-gray-500">
+                {instructions.length}/500
               </p>
             </div>
 
-            <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
-              This is a checkout preview. Table verification
-              and secure order submission are not enabled yet.
+            <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
+              Your order will be sent directly to the kitchen.
             </div>
+
+            {unavailableItems.length > 0 && (
+              <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                Some items are out of stock.
+                Remove them before placing your order.
+              </div>
+            )}
+
+            {!qrId && (
+              <div className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                Scan your table QR code to place an order.
+              </div>
+            )}
           </section>
+        )}
+
+        {/* SUCCESS SCREEN */}
+        {screen === "success" && orderResult && (
+          <section className="rounded-xl border bg-white p-6 text-center shadow-sm">
+            <div className="text-4xl">✓</div>
+
+            <h2 className="mt-4 text-2xl font-bold">
+              Order Placed!
+            </h2>
+
+            <p className="mt-3 text-gray-600">
+              Your order has been sent to the kitchen.
+            </p>
+
+            <div className="mt-6 rounded-lg bg-gray-50 p-4 text-left">
+              <p className="text-xs text-gray-500">
+                Order Reference
+              </p>
+
+              <p className="mt-1 break-all text-sm font-semibold">
+                {orderResult.orderId}
+              </p>
+
+              <p className="mt-4 text-xs text-gray-500">
+                Total
+              </p>
+
+              <p className="mt-1 font-bold">
+                {formatPrice(orderResult.total)}
+              </p>
+
+              <p className="mt-4 text-xs text-gray-500">
+                Status
+              </p>
+
+              <p className="mt-1 font-semibold capitalize">
+                {orderResult.status.replaceAll("_", " ")}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setOrderResult(null);
+                goTo("menu");
+              }}
+              className="mt-6 rounded-lg bg-black px-6 py-3 font-semibold text-white"
+            >
+              Back to Menu
+            </button>
+          </section>
+        )}
+
+        {/* Error message */}
+        {error && (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+          >
+            {error}
+          </div>
         )}
       </div>
 
-      {/* BOTTOM ACTION BAR */}
-      {itemCount > 0 && (
-        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white p-4 shadow-lg">
+      {/* STICKY CART / CHECKOUT BAR */}
+      {screen !== "success" && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-gray-200 bg-white px-4 py-3 shadow-lg">
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
             <div>
-              <p className="font-semibold">
-                {itemCount}{" "}
-                {itemCount === 1 ? "item" : "items"}
+              <p className="text-sm font-semibold">
+                {totalQuantity}{" "}
+                {totalQuantity === 1 ? "item" : "items"}
               </p>
-              <p className="text-sm text-gray-600">
+
+              <p className="text-sm text-gray-700">
                 {formatPrice(subtotal)}
               </p>
             </div>
 
-            {view === "menu" && (
+            {screen === "menu" && (
               <button
                 type="button"
-                onClick={() => setView("cart")}
-                className="rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white"
+                disabled={totalQuantity === 0}
+                onClick={() => goTo("cart")}
+                className="rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white disabled:bg-gray-400"
               >
                 View Cart →
               </button>
             )}
 
-            {view === "cart" && (
+            {screen === "cart" && (
               <button
                 type="button"
-                onClick={() => setView("checkout")}
-                className="rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white"
+                disabled={
+                  totalQuantity === 0 ||
+                  unavailableItems.length > 0
+                }
+                onClick={() => goTo("checkout")}
+                className="rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white disabled:bg-gray-400"
               >
                 Checkout →
               </button>
             )}
 
-            {view === "checkout" && (
+            {screen === "checkout" && (
               <button
                 type="button"
-                disabled
-                className="cursor-not-allowed rounded-lg bg-gray-400 px-5 py-3 text-sm font-semibold text-white"
+                disabled={
+                  submitting ||
+                  !qrId ||
+                  totalQuantity === 0 ||
+                  unavailableItems.length > 0
+                }
+                onClick={() => void placeOrder()}
+                className="rounded-lg bg-black px-5 py-3 text-sm font-semibold text-white disabled:bg-gray-400"
               >
-                Place Order (Coming Soon)
+                {submitting
+                  ? "Placing Order..."
+                  : "Place Order"}
               </button>
             )}
           </div>
