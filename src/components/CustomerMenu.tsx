@@ -1,7 +1,8 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import OrderTracker from "@/components/OrderTracker";
 
 type Category = {
   id: string;
@@ -25,7 +26,7 @@ type Props = {
   qrId?: string;
 };
 
-type Screen = "menu" | "cart" | "checkout" | "success";
+type Screen = "menu" | "cart" | "checkout" | "success" | "tracker";
 
 type OrderResult = {
   orderId: string;
@@ -54,8 +55,32 @@ export default function CustomerMenu({
   const [orderResult, setOrderResult] =
     useState<OrderResult | null>(null);
 
+  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
+  const [activeOrderStatus, setActiveOrderStatus] = useState<string | null>(null);
+
   const [idempotencyKey, setIdempotencyKey] =
     useState<string | null>(null);
+
+  // Restore active order from localStorage if customer returns or reloads
+  useEffect(() => {
+    if (!qrId || typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(`smartdine_active_order_${qrId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          parsed.orderId &&
+          typeof parsed.orderId === "string" &&
+          Date.now() - (parsed.savedAt || 0) < 6 * 60 * 60 * 1000
+        ) {
+          setActiveOrderId(parsed.orderId);
+          if (parsed.status) setActiveOrderStatus(parsed.status);
+        }
+      }
+    } catch (e) {
+      console.warn("Unable to restore active order from localStorage", e);
+    }
+  }, [qrId]);
 
   const formatPrice = (price: number) =>
     `PKR ${price.toLocaleString("en-PK")}`;
@@ -297,24 +322,43 @@ export default function CustomerMenu({
         );
       }
 
+      const orderId = result.orderId;
+      const initialStatus =
+        typeof result.status === "string" ? result.status : "received";
+
       setOrderResult({
-        orderId: result.orderId,
+        orderId,
         total:
           typeof result.total === "number"
             ? result.total
             : subtotal,
-        status:
-          typeof result.status === "string"
-            ? result.status
-            : "received",
+        status: initialStatus,
         replayed: Boolean(result.replayed),
       });
+
+      setActiveOrderId(orderId);
+      setActiveOrderStatus(initialStatus);
+
+      try {
+        if (qrId && typeof window !== "undefined") {
+          localStorage.setItem(
+            `smartdine_active_order_${qrId}`,
+            JSON.stringify({
+              orderId,
+              status: initialStatus,
+              savedAt: Date.now(),
+            })
+          );
+        }
+      } catch (storageErr) {
+        console.warn("Unable to save active order to localStorage", storageErr);
+      }
 
       setCart({});
       setInstructions("");
       setIdempotencyKey(null);
 
-      goTo("success");
+      goTo("tracker");
     } catch (err) {
       setError(
         err instanceof Error
@@ -324,6 +368,22 @@ export default function CustomerMenu({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (screen === "tracker" && activeOrderId) {
+    return (
+      <main className="min-h-screen bg-gray-50 pb-20 text-gray-900">
+        <OrderTracker
+          orderId={activeOrderId}
+          qrId={qrId}
+          restaurantName={restaurantName}
+          onBackToMenu={() => goTo("menu")}
+          onOrderServed={() => {
+            setActiveOrderStatus("served");
+          }}
+        />
+      </main>
+    );
   }
 
   return (
@@ -339,6 +399,43 @@ export default function CustomerMenu({
             SmartDine Digital Ordering
           </p>
         </header>
+
+        {/* ACTIVE ORDER BANNER */}
+        {activeOrderId && screen !== "success" && (
+          <aside className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50/90 p-4 shadow-xs">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <span className="relative flex h-3 w-3 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500"></span>
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                      Order in Progress (#{activeOrderId.slice(0, 8)})
+                    </p>
+                    {activeOrderStatus && (
+                      <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-800 capitalize">
+                        {activeOrderStatus.replace("_", " ")}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-xs text-emerald-700">
+                    Your food is being processed in the kitchen.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => goTo("tracker")}
+                className="inline-flex items-center justify-center rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-900 transition"
+              >
+                Track Live Progress →
+              </button>
+            </div>
+          </aside>
+        )}
 
         {/* MENU */}
         {screen === "menu" && (
@@ -651,10 +748,24 @@ export default function CustomerMenu({
             <button
               type="button"
               onClick={() => {
+                if (activeOrderId) {
+                  goTo("tracker");
+                } else {
+                  goTo("menu");
+                }
+              }}
+              className="mt-6 w-full rounded-xl bg-black py-3.5 text-center text-sm font-bold text-white shadow-xs hover:bg-gray-800 transition"
+            >
+              Track Live Order Progress →
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
                 setOrderResult(null);
                 goTo("menu");
               }}
-              className="mt-6 rounded-lg bg-black px-6 py-3 font-semibold text-white"
+              className="mt-3 w-full rounded-xl border border-gray-300 bg-white py-3 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 transition"
             >
               Back to Menu
             </button>
