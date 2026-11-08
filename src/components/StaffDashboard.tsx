@@ -327,7 +327,7 @@ export default function StaffDashboard({
   // Update order
   function changeStatus(
     order: Order,
-    status: "preparing" | "ready"
+    status: "preparing" | "ready" | "served"
   ) {
     return performAction(
       `/api/staff/orders/${order.id}/status`,
@@ -661,9 +661,26 @@ export default function StaffDashboard({
                     )}
 
                     {order.status === "ready" && (
-                      <span className="font-semibold text-green-700">
-                        Ready for Collection
-                      </span>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span className="font-semibold text-green-700">
+                          Ready for Collection
+                        </span>
+                        <button
+                          type="button"
+                          disabled={updating === order.id}
+                          onClick={() =>
+                            void changeStatus(
+                              order,
+                              "served"
+                            )
+                          }
+                          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition"
+                        >
+                          {updating === order.id
+                            ? "Updating..."
+                            : "Mark Served ✓"}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </article>

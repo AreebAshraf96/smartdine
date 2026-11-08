@@ -51,8 +51,11 @@ export function roleCanTransition(role: StaffRole, from: string, to: string) {
       (from === "ready" && to === "served");
   }
   if (role === "kitchen") {
-    return (from === "received" && to === "preparing") ||
-      (from === "preparing" && to === "ready");
+    return (
+      (from === "received" && to === "preparing") ||
+      (from === "preparing" && to === "ready") ||
+      (from === "ready" && to === "served")
+    );
   }
   return false;
 }
