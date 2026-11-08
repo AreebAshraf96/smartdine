@@ -75,6 +75,30 @@ export default function CustomerMenu({
         ) {
           setActiveOrderId(parsed.orderId);
           if (parsed.status) setActiveOrderStatus(parsed.status);
+
+          // Always verify latest live status from server
+          fetch(
+            `/api/orders/${parsed.orderId}/status?qrId=${encodeURIComponent(
+              qrId
+            )}`
+          )
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              if (data?.order?.status) {
+                setActiveOrderStatus(data.order.status);
+                try {
+                  localStorage.setItem(
+                    `smartdine_active_order_${qrId}`,
+                    JSON.stringify({
+                      orderId: parsed.orderId,
+                      status: data.order.status,
+                      savedAt: parsed.savedAt || Date.now(),
+                    })
+                  );
+                } catch {}
+              }
+            })
+            .catch(() => {});
         }
       }
     } catch (e) {
@@ -378,8 +402,20 @@ export default function CustomerMenu({
           qrId={qrId}
           restaurantName={restaurantName}
           onBackToMenu={() => goTo("menu")}
-          onOrderServed={() => {
+          onOrderServed={(served) => {
             setActiveOrderStatus("served");
+            try {
+              if (qrId && typeof window !== "undefined") {
+                localStorage.setItem(
+                  `smartdine_active_order_${qrId}`,
+                  JSON.stringify({
+                    orderId: served.id,
+                    status: "served",
+                    savedAt: Date.now(),
+                  })
+                );
+              }
+            } catch {}
           }}
         />
       </main>
@@ -400,19 +436,33 @@ export default function CustomerMenu({
           </p>
         </header>
 
-        {/* ACTIVE ORDER BANNER */}
+        {/* ACTIVE / SERVED ORDER BANNER */}
         {activeOrderId && screen !== "success" && (
-          <aside className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50/90 p-4 shadow-xs">
+          <aside
+            className={`mb-6 rounded-2xl border p-4 shadow-xs transition-colors ${
+              activeOrderStatus === "served"
+                ? "border-emerald-300 bg-emerald-50/95"
+                : "border-emerald-200 bg-emerald-50/90"
+            }`}
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-3">
-                <span className="relative flex h-3 w-3 shrink-0">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500"></span>
-                </span>
+              <div className="flex items-start gap-3">
+                {activeOrderStatus === "served" ? (
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white shadow-xs">
+                    ✓
+                  </span>
+                ) : (
+                  <span className="relative mt-1 flex h-3 w-3 shrink-0">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500"></span>
+                  </span>
+                )}
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-bold uppercase tracking-wider text-emerald-900">
-                      Order in Progress (#{activeOrderId.slice(0, 8)})
+                      {activeOrderStatus === "served"
+                        ? `Order Served (#${activeOrderId.slice(0, 8)})`
+                        : `Order in Progress (#${activeOrderId.slice(0, 8)})`}
                     </p>
                     {activeOrderStatus && (
                       <span className="rounded-full bg-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-800 capitalize">
@@ -420,8 +470,10 @@ export default function CustomerMenu({
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 text-xs text-emerald-700">
-                    Your food is being processed in the kitchen.
+                  <p className="mt-0.5 text-xs text-emerald-800">
+                    {activeOrderStatus === "served"
+                      ? "Your order has been served, enjoy your meal, if you need to order more, please do it from below."
+                      : "Your food is being processed in the kitchen."}
                   </p>
                 </div>
               </div>
@@ -429,9 +481,11 @@ export default function CustomerMenu({
               <button
                 type="button"
                 onClick={() => goTo("tracker")}
-                className="inline-flex items-center justify-center rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-900 transition"
+                className="shrink-0 inline-flex items-center justify-center rounded-xl bg-emerald-800 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-900 transition"
               >
-                Track Live Progress →
+                {activeOrderStatus === "served"
+                  ? "View Order Details →"
+                  : "Track Live Progress →"}
               </button>
             </div>
           </aside>

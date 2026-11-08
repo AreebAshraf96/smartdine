@@ -91,7 +91,7 @@ export default function OrderTracker({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
   const [showCelebration, setShowCelebration] = useState(false);
-  const [celebrationCountdown, setCelebrationCountdown] = useState(4);
+  const [celebrationCountdown, setCelebrationCountdown] = useState(15);
   const [showDetails, setShowDetails] = useState(false);
 
   const formatPrice = (price: number) =>
@@ -123,6 +123,7 @@ export default function OrderTracker({
               data.order.status === "served" &&
               (!prev || prev.status !== "served")
             ) {
+              setCelebrationCountdown(15);
               setShowCelebration(true);
             }
             return data.order as TrackedOrder;
