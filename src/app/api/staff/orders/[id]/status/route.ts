@@ -51,7 +51,8 @@ export async function PATCH(
 
     if (
       nextStatus !== "preparing" &&
-      nextStatus !== "ready"
+      nextStatus !== "ready" &&
+      nextStatus !== "served"
     ) {
       return NextResponse.json(
         { error: "Invalid kitchen status" },
