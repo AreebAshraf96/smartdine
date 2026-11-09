@@ -108,6 +108,56 @@ export default function AgentDemo() {
     }
   }
 
+  async function sendReceipt() {
+    if (busy || !customerRef) return;
+    setBusy(true);
+
+    setMessages((previous) => [
+      ...previous,
+      {
+        role: "customer",
+        text: "📸 [Uploaded Payment Screenshot: bank_transfer_receipt.jpg]",
+      },
+    ]);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          customerRef,
+          action: "upload_receipt",
+          imageUrl: "https://demo.smartdine.com/receipts/bank_transfer_receipt.jpg",
+        }),
+      });
+
+      const data = await response.json();
+
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "agent",
+          text:
+            typeof data.reply === "string"
+              ? data.reply
+              : "Screenshot received! Our team is verifying it.",
+        },
+      ]);
+    } catch {
+      setMessages((previous) => [
+        ...previous,
+        {
+          role: "agent",
+          text: "Failed to upload screenshot. Please try again.",
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section
       style={{
@@ -240,6 +290,26 @@ export default function AgentDemo() {
           {busy ? "Sending..." : "Send"}
         </button>
       </form>
+
+      <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
+        <button
+          type="button"
+          onClick={() => void sendReceipt()}
+          disabled={busy || !customerRef}
+          style={{
+            padding: "8px 14px",
+            background: "#f3f4f6",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 500,
+            color: "#374151",
+            cursor: "pointer",
+          }}
+        >
+          📸 Upload Payment Receipt (Demo)
+        </button>
+      </div>
 
       <p
         style={{
