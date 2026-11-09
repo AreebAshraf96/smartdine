@@ -15,6 +15,9 @@ export async function GET(request: Request, { params }: Props) {
 
     const { searchParams } = new URL(request.url);
     const qrId = searchParams.get("qrId");
+    if (!qrId || !uuidPattern.test(qrId)) {
+      return NextResponse.json({error: "Valid table QR required"}, {status: 400});
+    }
 
     const admin = getSupabaseAdmin();
 
@@ -47,14 +50,20 @@ export async function GET(request: Request, { params }: Props) {
 
         if (table) {
           tableNumber = table.table_number;
-          if (qrId && uuidPattern.test(qrId) && table.qr_code_id !== qrId) {
+          if (table.qr_code_id !== qrId) {
             return NextResponse.json(
               { error: "Order does not belong to this table" },
               { status: 403 }
             );
           }
+        } else {
+          return NextResponse.json({error:"Table not found"},{status:404});
         }
+      } else {
+        return NextResponse.json({error:"Order session invalid"},{status:404});
       }
+    } else {
+      return NextResponse.json({error:"Order session missing"},{status:404});
     }
 
     const { data: items, error: itemsError } = await admin

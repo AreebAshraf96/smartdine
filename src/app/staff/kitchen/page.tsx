@@ -1,4 +1,3 @@
-import StaffDashboard from "@/components/StaffDashboard";
-export default function KitchenPage() {
-  return <StaffDashboard view="kitchen" />;
-}
+import { redirect } from "next/navigation";
+// Retired entry point. Only manager and owner user types exist.
+export default function OldKitchen(){redirect("/staff/login");}

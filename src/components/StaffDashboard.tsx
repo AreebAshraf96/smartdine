@@ -5,12 +5,14 @@ import {
   useCallback,
   useEffect,
   useState,
+  useRef,
 } from "react";
-import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import ManagerMenu from "@/components/ManagerMenu";
+import StaffPayments from "@/components/StaffPayments";
 
-type Tab = "orders" | "calls" | "stock";
+type Tab = "orders" | "calls" | "stock" | "menu" | "payments";
 
 type Order = {
   id: string;
@@ -42,19 +44,17 @@ type StockItem = {
 };
 
 type Props = {
-  view?: "kitchen";
+  view?: "kitchen" | "manager";
 };
 
 export default function StaffDashboard({
-  view: _view,
+  view = "kitchen",
 }: Props) {
   const [session, setSession] =
     useState<Session | null>(null);
 
   const [ready, setReady] = useState(false);
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
 
   const [tab, setTab] =
     useState<Tab>("orders");
@@ -69,10 +69,42 @@ export default function StaffDashboard({
     useState<StockItem[]>([]);
 
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const [updating, setUpdating] =
     useState<string | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [managerAccess, setManagerAccess] = useState(false);
+  const [ownerAccess, setOwnerAccess] = useState(false);
+  const [accessLoaded, setAccessLoaded] = useState(false);
+  const lastOrderIds = useRef<Set<string> | null>(null);
+  const lastCallIds = useRef<Set<string> | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+
+  async function enableSound() {
+    try {
+      const ctx = audioContextRef.current ?? new AudioContext();
+      audioContextRef.current = ctx;
+      await ctx.resume();
+      setSoundEnabled(true);
+    } catch (e) { setError("Audio could not be enabled. Check browser permissions."); }
+  }
+  const ring = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!soundEnabled || !ctx || ctx.state !== "running") return;
+    const start = ctx.currentTime;
+    for (const offset of [0, 0.22]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, start + offset);
+      gain.gain.exponentialRampToValueAtTime(0.12, start + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.16);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(start + offset); osc.stop(start + offset + 0.17);
+    }
+  }, [soundEnabled]);
+
 
   const formatPrice = (value: number) =>
     `PKR ${value.toLocaleString("en-PK")}`;
@@ -164,32 +196,33 @@ export default function StaffDashboard({
     ) => {
       try {
         // Orders
-        if (selectedTab === "orders") {
+        if (true) {
           const result = await api(
             "/api/staff/orders?view=kitchen",
             token
           );
 
-          setOrders(
-            (result.orders ?? []) as Order[]
-          );
+          const nextOrders = (result.orders ?? []) as Order[];
+          const nextIds = new Set(nextOrders.map(o => o.id));
+          if (lastOrderIds.current && nextOrders.some(o => !lastOrderIds.current!.has(o.id))) ring();
+          lastOrderIds.current = nextIds;
+          setOrders(nextOrders);
         }
 
         // Waiter calls are fetched when viewing
         // either Orders or Waiter Calls.
         // This keeps the call notification current.
-        if (
-          selectedTab === "calls" ||
-          selectedTab === "orders"
-        ) {
+        if (true) {
           const result = await api(
             "/api/staff/waiter-calls",
             token
           );
 
-          setCalls(
-            (result.calls ?? []) as WaiterCall[]
-          );
+          const nextCalls = (result.calls ?? []) as WaiterCall[];
+          const nextIds = new Set(nextCalls.map(c => c.id));
+          if (lastCallIds.current && nextCalls.some(c => !lastCallIds.current!.has(c.id))) ring();
+          lastCallIds.current = nextIds;
+          setCalls(nextCalls);
         }
 
         // Stock availability
@@ -213,7 +246,7 @@ export default function StaffDashboard({
         );
       }
     },
-    [api]
+    [api, ring]
   );
 
   // Refresh automatically every 5 seconds
@@ -249,37 +282,15 @@ export default function StaffDashboard({
     };
   }, [session, tab, loadData]);
 
-  // Staff sign in
-  async function signIn(
-    event: FormEvent<HTMLFormElement>
-  ) {
-    event.preventDefault();
-
-    setBusy(true);
-    setError("");
-
-    try {
-      const result =
-        await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-
-      if (result.error) {
-        throw result.error;
-      }
-
-      setPassword("");
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Login failed"
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
+  // Check manager role via server; never rely on client-side tab visibility for authorization.
+  useEffect(() => {
+    if (!session) { setAccessLoaded(false); setManagerAccess(false);setOwnerAccess(false); return; }
+    let active = true;
+    void api("/api/staff/access", session.access_token)
+      .then(d => {if(active) {setManagerAccess(Boolean(d.canManageMenu));setOwnerAccess(Boolean(d.isOwner));setAccessLoaded(true);}})
+      .catch(e => {if(active) {setManagerAccess(false);setAccessLoaded(true);setError(String(e));}});
+    return () => {active=false;};
+  }, [session, api]);
 
   // Perform authenticated update
   async function performAction(
@@ -366,72 +377,15 @@ export default function StaffDashboard({
     );
   }
 
-  // Login screen
   if (!session) {
-    return (
-      <main className="min-h-screen bg-gray-50 p-5 text-gray-900">
-        <form
-          onSubmit={signIn}
-          className="mx-auto mt-16 max-w-sm space-y-4 rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
-        >
-          <h1 className="text-2xl font-bold">
-            SmartDine Kitchen
-          </h1>
+    return <main className="p-8"><a href="/staff/login" className="underline">Sign in to SmartDine</a></main>;
+  }
 
-          <p className="text-sm text-gray-600">
-            Sign in to manage incoming orders,
-            waiter calls and menu availability.
-          </p>
-
-          <label className="block text-sm font-medium">
-            Email
-            <input
-              required
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) =>
-                setEmail(event.target.value)
-              }
-              className="mt-1 w-full rounded-lg border border-gray-300 p-3"
-            />
-          </label>
-
-          <label className="block text-sm font-medium">
-            Password
-            <input
-              required
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) =>
-                setPassword(event.target.value)
-              }
-              className="mt-1 w-full rounded-lg border border-gray-300 p-3"
-            />
-          </label>
-
-          {error && (
-            <p
-              role="alert"
-              className="text-sm text-red-700"
-            >
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full rounded-lg bg-black p-3 font-semibold text-white disabled:opacity-50"
-          >
-            {busy
-              ? "Signing in..."
-              : "Sign In"}
-          </button>
-        </form>
-      </main>
-    );
+  if (accessLoaded && !managerAccess) {
+    return <main className="p-8"><p>Manager or owner access required.</p><button onClick={() => void supabase.auth.signOut()} className="mt-4 rounded border px-4 py-2">Sign out</button></main>;
+  }
+  if (!accessLoaded) {
+    return <main className="p-8">Checking manager permissions...</main>;
   }
 
   // Main kitchen dashboard
@@ -442,7 +396,7 @@ export default function StaffDashboard({
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold">
-              SmartDine Kitchen
+              SmartDine Restaurant Operations
             </h1>
 
             <p className="mt-1 text-sm text-gray-600">
@@ -463,6 +417,14 @@ export default function StaffDashboard({
               className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium hover:bg-gray-100"
             >
               Refresh
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void enableSound()}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium"
+            >
+              {soundEnabled ? "🔔 Sound enabled" : "🔕 Enable sound alerts"}
             </button>
 
             <button
@@ -531,6 +493,13 @@ export default function StaffDashboard({
           </button>
         </nav>
 
+        {ownerAccess && <p className="mb-3"><a href="/staff/owner" className="inline-flex rounded-lg border bg-white px-4 py-2 text-sm font-semibold">Owner analytics & reports</a></p>}
+        <nav className="mb-4 flex flex-wrap gap-2">
+          <button className={`rounded-lg px-4 py-2 ${tab === "payments" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("payments")}>Payments</button>
+          {managerAccess && <button className={`rounded-lg px-4 py-2 ${tab === "menu" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("menu")}>Manage Menu</button>}
+
+        </nav>
+
         {/* Error display */}
         {error && (
           <div
@@ -540,6 +509,10 @@ export default function StaffDashboard({
             {error}
           </div>
         )}
+
+        {tab === "menu" && managerAccess && <ManagerMenu />}
+
+        {tab === "payments" && <StaffPayments />}
 
         {/* ORDERS TAB */}
         {tab === "orders" && (

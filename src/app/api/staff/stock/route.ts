@@ -2,10 +2,12 @@
 import { NextResponse } from "next/server";
 import { authenticateStaff } from "@/lib/staffAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { connection } from "next/server";
 
 const permitted = ["owner", "manager", "kitchen"];
 
 export async function GET(request: Request) {
+  await connection();
   try {
     const auth = await authenticateStaff(request);
 

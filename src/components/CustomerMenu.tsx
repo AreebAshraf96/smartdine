@@ -742,7 +742,8 @@ export default function CustomerMenu({
             </div>
 
             <div className="mt-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">
-              Your order will be sent directly to the kitchen.
+              Your order will be confirmed and sent to the kitchen
+only after completing the payment step.
             </div>
 
             {unavailableItems.length > 0 && (
@@ -891,7 +892,7 @@ export default function CustomerMenu({
               >
                 {submitting
                   ? "Placing Order..."
-                  : "Place Order"}
+                  : "Continue to Payment"}
               </button>
             )}
           </div>

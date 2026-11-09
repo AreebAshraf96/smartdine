@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CallWaiter from "@/components/CallWaiter";
+import CustomerExtras from "@/components/CustomerExtras";
 
 export type OrderStatus =
   | "pending_approval"
@@ -121,7 +122,7 @@ export default function OrderTracker({
             // Trigger celebration on transition to 'served'
             if (
               data.order.status === "served" &&
-              (!prev || prev.status !== "served")
+              (prev !== null && prev.status !== "served")
             ) {
               setCelebrationCountdown(15);
               setShowCelebration(true);
@@ -316,7 +317,18 @@ export default function OrderTracker({
           </span>
         </div>
 
-        {order?.status === "cancelled" ? (
+        {order?.status === "pending_approval" ? (
+  <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-center">
+    <h3 className="text-lg font-bold text-amber-900">
+      Awaiting Payment Confirmation
+    </h3>
+    <p className="mt-2 text-sm text-amber-800">
+      Your order has not been sent to the kitchen yet.
+      Complete the payment step below.
+      If you chose cash, kitchen staff must approve it.
+    </p>
+  </div>
+) : order?.status === "cancelled" ? (
           <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-center">
             <span className="text-3xl">⚠️</span>
             <h3 className="mt-2 text-base font-bold text-red-800">
@@ -466,6 +478,15 @@ export default function OrderTracker({
           </div>
         )}
       </div>
+
+      {order && (
+        <CustomerExtras
+          orderId={order.id}
+          qrId={qrId}
+          subtotal={order.totalAmount}
+          served={order.status === "served"}
+        />
+      )}
 
       {/* QUICK ACTIONS FOOTER */}
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">

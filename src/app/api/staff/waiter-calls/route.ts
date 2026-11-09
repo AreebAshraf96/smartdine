@@ -2,6 +2,8 @@
 import { NextResponse } from "next/server";
 import { authenticateStaff } from "@/lib/staffAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { connection } from "next/server";
+
 
 // Correct UUID format: 8-4-4-4-12
 const uuidPattern =
@@ -19,6 +21,7 @@ function canAccess(role: string): boolean {
 // --------------------------------------------------
 
 export async function GET(request: Request) {
+  await connection();
   try {
     const auth = await authenticateStaff(request);
 

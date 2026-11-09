@@ -5,8 +5,10 @@ import {
   roleCanView,
 } from "@/lib/staffAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { connection } from "next/server";
 
 export async function GET(request: Request) {
+  await connection();
   try {
     const auth = await authenticateStaff(request);
 
