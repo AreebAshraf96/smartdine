@@ -2,7 +2,14 @@
 
 QR-based restaurant ordering with customer checkout, an owner dashboard, and manager operations. Built using Next.js, TypeScript, Tailwind CSS and Supabase.
 
-> **Development note:** Card payments are currently simulated. No real card is charged. Do not use demo payment mode for live transactions.
+> **Development note:** Card checkout supports Stripe test mode or local simulation. Use a development Supabase project for either mode.
+
+## Project status
+
+- QR ordering, cash approval, and kitchen tracking have been tested locally from Table 1 through service.
+- Staff can generate table QR codes, manage tables, view seven-day receipt archives, handle cancellations and full refunds, and record end-of-day reconciliation.
+- Customers can download a printable receipt or paid invoice from the order tracker. Owners can review and export sales and payment reports.
+- Stripe Checkout and refunds are implemented for test mode. A full Stripe test-mode run, restaurant onboarding, and production deployment remain pending.
 
 ## Run SmartDine locally
 
@@ -73,7 +80,7 @@ The five QR UUIDs are **demo data**. They work only if the corresponding `restau
 ## Quick test
 
 1. Open **Table 1**. Add an available dish and continue to payment.
-2. Choose **Card (Demo)** and optionally add a tip. Confirm that the order reaches the restaurant queue without a real charge.
+2. With local simulation enabled, choose **Pay by Card (Test)** and optionally add a tip. Confirm that the order reaches the restaurant queue without a real charge.
 3. Repeat with **Pay Cash**. The order must remain outside the cooking queue until a **manager or owner** approves the cash request.
 4. Sign in at `/staff/login`. **Manager** can handle orders, cash approvals, waiter calls, stock and menu editing; **owner** can do all that plus view analytics.
 5. Mark an order **Preparing → Ready → Served**, then check customer tracking and feedback.
@@ -103,6 +110,40 @@ Codes point to `NEXT_PUBLIC_SITE_URL`, or to the address the dashboard is open o
 4. Download a table's code and scan it with a phone on the same Wi-Fi. The menu should open for that table.
 
 Your network address can change. If phones stop connecting, run `ipconfig` again and update `.env.local`.
+
+## Stripe test checkout
+
+Use a development Supabase project because paid test orders enter the kitchen queue and financial reports. Add these server-only values to `.env.local`:
+
+```dotenv
+STRIPE_TEST_SECRET_KEY=YOUR_STRIPE_TEST_SECRET_KEY
+STRIPE_TEST_WEBHOOK_SECRET=YOUR_STRIPE_WEBHOOK_SIGNING_SECRET
+STRIPE_TEST_RETURN_ORIGIN=http://localhost:3000
+SMARTDINE_DEMO_PAYMENTS=false
+```
+
+For a local run, sign in to the Stripe CLI and run `stripe listen --events checkout.session.completed,checkout.session.expired --forward-to localhost:3000/api/webhooks/stripe`. Use the listener's webhook signing secret above. For staging, configure a test-mode webhook endpoint for both events and set the return origin to the staging HTTPS origin. The customer browser must open the table menu on that same origin so it can restore the order after the redirect.
+
+Restart the app, scan a development table code, choose **Pay by Card (Test)**, and complete Checkout with a Stripe test card. Check that the order stays pending until the signed webhook arrives, then appears in the kitchen queue. In the Stripe dashboard, the Checkout Session's SmartDine payment and order IDs are available in its metadata. An expired test checkout requires a new order.
+
+## Reporting time zones
+
+Set the optional server-side `SMARTDINE_RESTAURANT_TIME_ZONES` environment variable to a JSON object mapping restaurant IDs to IANA time zones, for example `{"restaurant-uuid":"Australia/Sydney"}`. Restaurants without an entry continue to use `Asia/Karachi`. Restart the app after changing the setting.
+
+## Order receipts
+
+Apply [the receipts migration](supabase/migrations/202611200001_order_receipts.sql) to the SmartDine Supabase database after the existing order and payment schema is installed. The migration enables Supabase Cron, captures paid receipts from the previous seven days, and schedules cleanup every minute.
+
+Owners and managers can open **Receipts** directly in their respective staff dashboards for their restaurants. A receipt expires 168 hours after payment confirmation, and the scheduled job deletes expired copies even when the app is offline. Orders and payment records still support operations and reporting.
+
+## Staff operations
+
+Apply the [table management](supabase/migrations/202611200002_table_management.sql) and [refunds and reconciliation](supabase/migrations/202611200003_refunds_reconciliation.sql) migrations after the receipts migration. Run the three migration files in numeric order in the Supabase SQL Editor. Skip any migration already applied successfully. These changes use the existing SmartDine schema.
+
+- In **QR Codes**, staff can add and rename tables, deactivate or reactivate them, or remove them from the active staff list. Removed tables stay inactive in the database so order history keeps its table reference.
+- In **Refunds & cancellations**, staff can find an order by its full ID. A paid order needs a full refund before cancellation. For cash, return the money before recording the refund. Stripe refunds apply to test-mode payments made after the migration. Pending or partial Stripe refunds must be reviewed in Stripe. Cancellation preserves the original items and does not replenish stock automatically.
+- The customer order tracker offers printable HTML receipt and paid-invoice downloads for seven days after payment. Customers can save these as PDF from the browser print dialog.
+- Under **Reconciliation**, enter the day's counted cash and the card processor's net transaction amount in PKR before fees. The saved close records expected amounts, variances, and the staff member. Test card activity is displayed separately. Use the processor's report for the same business date and currency.
 
 ## Checks and collaboration
 

@@ -2,6 +2,9 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { findOrderAtQr } from "@/lib/customerOrderAccess";
+import { getStripeTestConfig, ORDER_CURRENCY, paymentMinorUnits, STRIPE_TEST_PROVIDER } from "@/lib/stripeTest";
+
+const PAYMENT_FIELDS = "id, method, status, total_amount, tip_amount, provider, updated_at";
 
 const demoMode =
   process.env.NODE_ENV !== "production" &&
@@ -74,68 +77,93 @@ export async function POST(request: Request) {
     }
 
     const db = getSupabaseAdmin();
-
     const { data: existing, error: lookupError } = await db
       .from("order_payment_choices")
-      .select("id, method, status")
+      .select(PAYMENT_FIELDS)
       .eq("order_id", order.id)
       .maybeSingle();
 
     if (lookupError) throw lookupError;
 
-    if (existing?.status === "paid") {
-      return NextResponse.json(
-        { error: "This order is already confirmed" },
-        { status: 409 }
-      );
+    if (order.status !== "pending_approval" || existing?.status === "paid" || existing?.status === "processing") {
+      return NextResponse.json({ error: "Order is no longer awaiting a payment choice" }, { status: 409 });
     }
 
-    if (existing?.status === "processing") {
-      return NextResponse.json(
-        { error: "Payment is processing" },
-        { status: 409 }
-      );
+    const stripe = method === "card" ? getStripeTestConfig() : null;
+    if (existing?.provider === STRIPE_TEST_PROVIDER && !stripe) {
+      return NextResponse.json({ error: "This order already has a Stripe test checkout" }, { status: 409 });
+    }
+    if (method === "card" && !stripe && !demoMode) {
+      return NextResponse.json({ error: "Card test checkout is unavailable" }, { status: 503 });
     }
 
-    if (order.status !== "pending_approval") {
-      return NextResponse.json(
-        { error: "Order is not awaiting payment" },
-        { status: 409 }
-      );
+    if (stripe && new URL(request.url).origin !== stripe.origin) {
+      return NextResponse.json({ error: "Open the table menu on the Stripe test site to pay by card" }, { status: 409 });
+    }
+    if (stripe) paymentMinorUnits(Number(order.total_amount) + tipAmount);
+
+    const choice = {
+      order_id: order.id,
+      restaurant_id: order.restaurant_id,
+      method,
+      status: "pending",
+      subtotal: Number(order.total_amount),
+      tip_amount: tipAmount,
+      currency: ORDER_CURRENCY.toUpperCase(),
+      provider: stripe ? STRIPE_TEST_PROVIDER : method === "card" ? "demo" : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Freeze Stripe's amount and payment method before opening a hosted session.
+    // Conditional writes also protect a payment approved in another request.
+    let payment = existing;
+    if (existing?.provider !== STRIPE_TEST_PROVIDER) {
+      const table = db.from("order_payment_choices");
+      const write = existing
+        ? table.update(choice).eq("id", existing.id).eq("status", existing.status)
+          .or("provider.is.null,provider.neq.stripe_test")
+        : table.upsert(choice, { onConflict: "order_id", ignoreDuplicates: true });
+      const result = await write.select(PAYMENT_FIELDS).maybeSingle();
+      if (result.error) throw result.error;
+      payment = result.data;
+    }
+    if (!payment) {
+      return NextResponse.json({ error: "Payment changed. Please try again." }, { status: 409 });
     }
 
-    // No real card provider is connected.
-    if (method === "card" && !demoMode) {
-      return NextResponse.json(
-        {
-          error:
-            "Card payment demo is disabled. Connect a real gateway before accepting cards.",
-        },
-        { status: 501 }
-      );
+    if (stripe) {
+      const expiresAt = Math.floor(Date.parse(payment.updated_at) / 1000) + 23 * 60 * 60;
+      if (expiresAt - Math.floor(Date.now() / 1000) < 30 * 60) {
+        return NextResponse.json({ error: "This test checkout can no longer be opened. Please start a new order." }, { status: 409 });
+      }
+
+      const returnUrl = new URL(`/r/${encodeURIComponent(qrId)}`, stripe.origin).href;
+      const session = await stripe.stripe.checkout.sessions.create({
+        mode: "payment",
+        allowed_payment_method_types: ["card"],
+        success_url: returnUrl,
+        cancel_url: returnUrl,
+        expires_at: expiresAt,
+        line_items: [{
+          quantity: 1,
+          price_data: {
+            currency: ORDER_CURRENCY,
+            unit_amount: paymentMinorUnits(payment.total_amount),
+            product_data: { name: "SmartDine restaurant order (test)" },
+          },
+        }],
+        metadata: { smartdine_order_id: order.id, smartdine_payment_id: payment.id },
+      }, { idempotencyKey: `smartdine-test-checkout-${payment.id}` });
+
+      if (session.livemode || !session.url) {
+        return NextResponse.json({ error: "This test checkout is closed. Check the order status or start a new order." }, { status: 409 });
+      }
+      const reference = await db.from("stripe_test_checkout_refs").upsert({
+        payment_id: payment.id, session_id: session.id,
+      }, { onConflict: "payment_id", ignoreDuplicates: true });
+      if (reference.error) throw reference.error;
+      return NextResponse.json({ confirmed: false, payment, checkoutUrl: session.url });
     }
-
-    // Insert or update the customer's selected method.
-    const { data: payment, error: paymentError } = await db
-      .from("order_payment_choices")
-      .upsert(
-        {
-          order_id: order.id,
-          restaurant_id: order.restaurant_id,
-          method,
-          status: "pending",
-          subtotal: Number(order.total_amount),
-          tip_amount: tipAmount,
-          currency: "PKR",
-          provider: method === "card" ? "demo" : null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "order_id" }
-      )
-      .select("id, method, status, total_amount, tip_amount")
-      .single();
-
-    if (paymentError) throw paymentError;
 
     // CASH: Wait for explicit kitchen approval.
     if (method === "pay_waiter") {
@@ -199,7 +227,7 @@ export async function GET(request: Request) {
     const { data: payment, error } = await db
       .from("order_payment_choices")
       .select(
-        "id, method, status, tip_amount, total_amount"
+        "id, method, status, tip_amount, total_amount, provider"
       )
       .eq("order_id", order.id)
       .maybeSingle();

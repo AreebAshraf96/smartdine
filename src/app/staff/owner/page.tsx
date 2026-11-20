@@ -4,11 +4,12 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import StaffDashboard from "@/components/StaffDashboard";
 import OwnerAnalytics from "@/components/OwnerAnalytics";
+import StaffReceipts from "@/components/StaffReceipts";
 
 export default function OwnerPage(){
  const router=useRouter();
  const [allowed,setAllowed]=useState<boolean|null>(null);
- const [tab,setTab]=useState<"analytics"|"operations">("analytics");
+ const [tab,setTab]=useState<"analytics"|"operations"|"receipts">("analytics");
  useEffect(()=>{
   let live=true;
   async function verify(){
@@ -29,8 +30,11 @@ export default function OwnerPage(){
      <div className="flex flex-wrap gap-2">
        <button type="button" onClick={()=>setTab("analytics")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${tab==="analytics"?"bg-black text-white":"border"}`}>Analytics & Reports</button>
        <button type="button" onClick={()=>setTab("operations")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${tab==="operations"?"bg-black text-white":"border"}`}>Manage Restaurant</button>
+       <button type="button" onClick={()=>setTab("receipts")} className={`rounded-lg px-4 py-2 text-sm font-semibold ${tab==="receipts"?"bg-black text-white":"border"}`}>Receipts</button>
      </div>
    </nav>
-   {tab==="analytics"?<OwnerAnalytics/>:<StaffDashboard view="manager"/>}
+   {tab==="analytics" && <OwnerAnalytics />}
+   {tab==="operations" && <StaffDashboard view="manager" />}
+   {tab==="receipts" && <main className="mx-auto max-w-5xl p-4 md:p-6"><StaffReceipts /></main>}
  </div>;
 }

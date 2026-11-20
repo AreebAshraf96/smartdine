@@ -52,17 +52,16 @@ export async function GET(request: Request) {
 
     const db = getSupabaseAdmin();
 
-    const { data, error } = await db
-      .from("order_payment_choices")
-      .select(
-        "id, order_id, restaurant_id, method, status, subtotal, tip_amount, total_amount, created_at"
-      )
+    const load = (relation: string) => db.from(relation)
+      .select("id, order_id, restaurant_id, method, status, subtotal, tip_amount, total_amount, created_at")
       .in("restaurant_id", access.ids)
       .eq("method", "pay_waiter")
       .eq("status", "pending")
       .order("created_at", { ascending: true })
       .limit(100);
-
+    const pending = await load("smartdine_pending_cash_payments");
+    const { data, error } = pending.error?.code === "PGRST205" || pending.error?.code === "42P01"
+      ? await load("order_payment_choices") : pending;
     if (error) throw error;
 
     return NextResponse.json(

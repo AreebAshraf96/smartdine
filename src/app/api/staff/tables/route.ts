@@ -25,14 +25,17 @@ export async function GET(request: Request) {
     const [restaurantsResult, tablesResult] = await Promise.all([
       db.from("restaurants").select("id,name").in("id", ids).order("name"),
       db.from("restaurant_tables")
-        .select("id,restaurant_id,table_number,qr_code_id,is_active")
+        .select("id,restaurant_id,table_number,qr_code_id,is_active,archived_at")
         .in("restaurant_id", ids),
     ]);
     if (restaurantsResult.error) throw restaurantsResult.error;
-    if (tablesResult.error) throw tablesResult.error;
+    const tables = tablesResult.error?.code === "42703"
+      ? await db.from("restaurant_tables").select("id,restaurant_id,table_number,qr_code_id,is_active").in("restaurant_id", ids)
+      : tablesResult;
+    if (tables.error) throw tables.error;
 
     return NextResponse.json(
-      { restaurants: restaurantsResult.data ?? [], tables: tablesResult.data ?? [] },
+      { restaurants: restaurantsResult.data ?? [], tables: (tables.data ?? []).filter(table => !("archived_at" in table) || !table.archived_at) },
       { headers: { "Cache-Control": "private, no-store" } }
     );
   } catch (e) {

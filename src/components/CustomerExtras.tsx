@@ -15,6 +15,7 @@ type PaymentInfo = {
   status: string;
   total_amount: number;
   tip_amount: number;
+  provider?: string | null;
 };
 
 export default function CustomerExtras({
@@ -137,6 +138,11 @@ export default function CustomerExtras({
         );
       }
 
+      if (typeof data.checkoutUrl === "string") {
+        window.location.assign(data.checkoutUrl);
+        return;
+      }
+
       setPayment(data.payment);
       setMessage(data.message ?? "Payment updated.");
     } catch (err) {
@@ -213,9 +219,15 @@ export default function CustomerExtras({
               Your order is now confirmed and has been
               sent to the kitchen.
             </p>
+            {qrId && (
+              <div className="mt-3 flex flex-wrap gap-3 text-sm">
+                <a className="underline" href={`/api/customer/receipt?orderId=${encodeURIComponent(orderId)}&qrId=${encodeURIComponent(qrId)}`}>Download receipt</a>
+                <a className="underline" href={`/api/customer/receipt?kind=invoice&orderId=${encodeURIComponent(orderId)}&qrId=${encodeURIComponent(qrId)}`}>Download paid order invoice</a>
+              </div>
+            )}
             {payment.method === "card" && (
               <p className="mt-2 text-xs font-semibold text-green-800">
-                DEMO CARD PAYMENT — No actual charge.
+                {payment.provider === "stripe_test" ? "Stripe test payment" : "Simulated card payment"}
               </p>
             )}
           </div>
@@ -238,6 +250,14 @@ export default function CustomerExtras({
             <p className="mt-2 text-xs text-amber-800">
               This demo does not collect real money.
             </p>
+          </div>
+        ) : payment?.provider === "stripe_test" ? (
+          <div className="space-y-3 rounded-xl border bg-slate-50 p-4">
+            <p className="font-semibold">Waiting for Stripe test payment</p>
+            <p className="text-sm">Total including tip: {format(Number(payment.total_amount))}</p>
+            <button type="button" disabled={busy} onClick={() => void choosePayment("card")} className="rounded-lg border bg-white px-4 py-2 font-semibold disabled:opacity-50">
+              Resume test checkout
+            </button>
           </div>
         ) : (
           <>
@@ -328,14 +348,12 @@ export default function CustomerExtras({
                 }
                 className="rounded-xl border border-gray-300 bg-white px-4 py-3 font-semibold disabled:opacity-50"
               >
-                Pay by Card (Demo)
+                Pay by Card (Test)
               </button>
             </div>
 
             <p className="text-xs text-gray-500">
-              Card demo immediately simulates approval.
-              Cash requires manual approval in the
-              kitchen dashboard. Neither collects money.
+              Card checkout runs in test mode. Cash requires staff approval.
             </p>
           </>
         )}

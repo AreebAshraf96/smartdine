@@ -1,9 +1,10 @@
 import { connection, NextResponse } from "next/server";
 import { authenticateStaff } from "@/lib/staffAuth";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { analyticsCalendar, shiftCalendarDate } from "@/lib/analyticsCalendar";
 
 const UUID = /^[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}$/i;
-const ZONE = "Asia/Karachi";
+const PAGE_SIZE = 500;
 const DAYS = [1, 7, 30, 90] as const;
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -12,24 +13,6 @@ type Item = { id: string; order_id: string; item_name: string; quantity: number;
 type Payment = { order_id: string; method: string; status: string; subtotal: number | string; tip_amount: number | string; total_amount: number | string };
 type Feedback = { order_id: string; rating: number; comment: string | null; created_at: string };
 type DishReview = { order_id: string; order_item_id: string; rating: number; comment: string | null; created_at: string };
-
-function timeParts(value: string) {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: ZONE, weekday: "short", hour: "2-digit", hourCycle: "h23",
-    year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(new Date(value));
-  const get = (type: string) => parts.find(p => p.type === type)?.value ?? "";
-  return { day: get("weekday"), hour: Number(get("hour")), date: `${get("year")}-${get("month")}-${get("day")}` };
-}
-
-function dayStart(days: number) {
-  // Pakistan Standard Time has a fixed UTC+05:00 offset; no daylight saving.
-  const now = new Date(Date.now() + 5 * 3_600_000);
-  const day = now.toISOString().slice(0, 10);
-  const start = new Date(`${day}T00:00:00+05:00`);
-  start.setUTCDate(start.getUTCDate() - (days - 1));
-  return start.toISOString();
-}
 
 export async function GET(request: Request) {
   await connection();
@@ -47,31 +30,36 @@ export async function GET(request: Request) {
     if (!DAYS.includes(days as 1 | 7 | 30 | 90)) return NextResponse.json({ error: "Choose 1, 7, 30 or 90 days" }, { status: 400 });
     const method = query.get("method") ?? "all";
     if (!["all", "card", "pay_waiter"].includes(method)) return NextResponse.json({error:"Invalid payment filter"},{status:400});
-    const from = query.get("from");
-    const to = query.get("to");
+    const from = query.get("from") || null;
+    const to = query.get("to") || null;
     const DATE = /^\d{4}-\d{2}-\d{2}$/;
     if ((from && !DATE.test(from)) || (to && !DATE.test(to))) return NextResponse.json({error:"Invalid dates"},{status:400});
     if (Boolean(from) !== Boolean(to)) return NextResponse.json({error:"Supply both from and to"},{status:400});
     if (from && to && (from > to || (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000 > 365 || !Number.isFinite(Date.parse(`${from}T00:00:00Z`)) || !Number.isFinite(Date.parse(`${to}T00:00:00Z`)))) return NextResponse.json({error:"Choose a valid period of up to 366 days"},{status:400});
+    if (from && to && (shiftCalendarDate(from, 0) !== from || shiftCalendarDate(to, 0) !== to)) {
+      return NextResponse.json({ error: "Choose valid calendar dates" }, { status: 400 });
+    }
+    const { timeZone, timeParts, localDayStart } = analyticsCalendar(restaurantId);
+    const today = timeParts(Date.now()).date;
+    const since = localDayStart(from ?? shiftCalendarDate(today, 1 - days));
+    const until = localDayStart(shiftCalendarDate(to ?? today, 1));
     const db = getSupabaseAdmin();
-    const since = from ? `${from}T00:00:00+05:00` : dayStart(days);
-    const until = to ? new Date(Date.parse(`${to}T00:00:00+05:00`) + 86400000).toISOString() : null;
-    // Pagination; return partialData=true when this safety bound is hit.
     const orders: Order[] = [];
-    const PAGE = 1000; const MAX = 5000;
-    for (let offset = 0; offset < MAX; offset += PAGE) {
+    let lastOrderId: string | undefined;
+    while (true) {
       let ordersQuery = db.from("orders")
         .select("id,status,created_at,total_amount")
         .eq("restaurant_id", restaurantId).gte("created_at", since);
-      if (until) ordersQuery = ordersQuery.lt("created_at", until);
+      ordersQuery = ordersQuery.lt("created_at", until);
+      if (lastOrderId) ordersQuery = ordersQuery.gt("id", lastOrderId);
       const { data, error } = await ordersQuery
-        .order("created_at", { ascending: false }).range(offset, offset + PAGE - 1);
+        .order("id").limit(PAGE_SIZE);
       if (error) throw error;
       const chunk = (data ?? []) as Order[];
       orders.push(...chunk);
-      if (chunk.length < PAGE) break;
+      if (chunk.length === 0) break;
+      lastOrderId = chunk.at(-1)?.id;
     }
-    const partialData = orders.length >= MAX;
     const activeOrders = orders.filter(o => o.status !== "cancelled" && o.status !== "pending_approval");
     const ids = activeOrders.map(o => o.id);
     const items: Item[] = [];
@@ -104,12 +92,12 @@ export async function GET(request: Request) {
     const revenue = confirmed.reduce((sum,o) => sum + Number(paid.get(o.id)!.subtotal), 0);
     const tips = confirmed.reduce((sum,o) => sum + Number(paid.get(o.id)!.tip_amount), 0);
     // Include unpaid cash approvals even though their orders are not in the cooking queue.
-    const { count: pendingCashCount, error: cashError } = await db
-      .from("order_payment_choices")
+    const countPendingCash = (relation: string) => db.from(relation)
       .select("id", { count: "exact", head: true })
-      .eq("restaurant_id", restaurantId)
-      .eq("method", "pay_waiter")
-      .eq("status", "pending");
+      .eq("restaurant_id", restaurantId).eq("method", "pay_waiter").eq("status", "pending");
+    const pendingCashResult = await countPendingCash("smartdine_pending_cash_payments");
+    const { count: pendingCashCount, error: cashError } = pendingCashResult.error?.code === "PGRST205" || pendingCashResult.error?.code === "42P01"
+      ? await countPendingCash("order_payment_choices") : pendingCashResult;
     if (cashError) throw cashError;
     const pendingCash = pendingCashCount ?? 0;
     // Reconciled cash/card register uses the payment confirmation time (paid_at).
@@ -119,20 +107,22 @@ export async function GET(request: Request) {
       subtotal:number|string; tip_amount:number|string;total_amount:number|string;paid_at:string;
     };
     const settled:PaidPayment[]=[];
-    const PAYMENT_PAGE=1000;
-    for(let offset=0;offset<5000;offset+=PAYMENT_PAGE){
+    let lastPaymentId: string | undefined;
+    while (true) {
       let q=db.from("order_payment_choices")
         .select("id,order_id,method,status,subtotal,tip_amount,total_amount,paid_at")
         .eq("restaurant_id",restaurantId).eq("status","paid")
         .gte("paid_at",since);
-      if(until)q=q.lt("paid_at",until);
+      q = q.lt("paid_at", until);
+      if (lastPaymentId) q = q.gt("id", lastPaymentId);
       if(method!=="all")q=q.eq("method",method);
-      const {data,error}=await q.order("paid_at",{ascending:false}).range(offset,offset+PAYMENT_PAGE-1);
+      const {data,error}=await q.order("id").limit(PAGE_SIZE);
       if(error)throw error;
-      settled.push(...((data??[]) as PaidPayment[]));
-      if((data??[]).length<PAYMENT_PAGE)break;
+      const chunk = (data ?? []) as PaidPayment[];
+      settled.push(...chunk);
+      if (chunk.length === 0) break;
+      lastPaymentId = chunk.at(-1)?.id;
     }
-    const partialPayments=settled.length>=5000;
     const dailyPayments = new Map<string, {
       date:string; cardCount:number;cashCount:number;
       cardAmount:number;cashAmount:number;cardTips:number;cashTips:number;
@@ -211,7 +201,7 @@ export async function GET(request: Request) {
     const topDay = [...weekdays].sort((a,b)=>b.count-a.count)[0];
 
     return NextResponse.json({
-      restaurantId,restaurantIds:owners,days,from:from??null,to:to??null,method,timezone:ZONE,partialData:partialData||partialPayments,
+      restaurantId,restaurantIds:owners,days,from:from??null,to:to??null,method,timezone:timeZone,partialData:false,
       paymentTotals:totals,dailyPayments:dailyPaymentSummary,
       kpis:{revenue,tips,totalCollected:revenue+tips,confirmedOrders:confirmed.length,unitsSold:sold.reduce((s,i)=>s+Number(i.quantity),0),
         avgOrderValue:confirmed.length?revenue/confirmed.length:0,avgRating:avgRating===null?null:Math.round(avgRating*10)/10,

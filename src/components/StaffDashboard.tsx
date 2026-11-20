@@ -11,9 +11,12 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import ManagerMenu from "@/components/ManagerMenu";
 import StaffPayments from "@/components/StaffPayments";
+import StaffReceipts from "@/components/StaffReceipts";
+import StaffOrderExceptions from "@/components/StaffOrderExceptions";
+import StaffReconciliation from "@/components/StaffReconciliation";
 import ManagerQrCodes from "@/components/ManagerQrCodes";
 
-type Tab = "orders" | "calls" | "stock" | "menu" | "payments" | "qr";
+type Tab = "orders" | "calls" | "stock" | "menu" | "payments" | "qr" | "receipts" | "exceptions" | "reconciliation";
 
 type Order = {
   id: string;
@@ -498,6 +501,9 @@ export default function StaffDashboard({
         <nav className="mb-4 flex flex-wrap gap-2 print:hidden">
           <button className={`rounded-lg px-4 py-2 ${tab === "payments" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("payments")}>Payments</button>
           {managerAccess && <button className={`rounded-lg px-4 py-2 ${tab === "menu" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("menu")}>Manage Menu</button>}
+          {managerAccess && <button type="button" className={`rounded-lg px-4 py-2 ${tab === "exceptions" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("exceptions") }>Refunds & cancellations</button>}
+          {managerAccess && <button type="button" className={`rounded-lg px-4 py-2 ${tab === "reconciliation" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("reconciliation") }>Reconciliation</button>}
+          {managerAccess && <button type="button" className={`rounded-lg px-4 py-2 ${tab === "receipts" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("receipts")}>Receipts</button>}
           {managerAccess && <button className={`rounded-lg px-4 py-2 ${tab === "qr" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("qr")}>QR Codes</button>}
 
         </nav>
@@ -517,6 +523,10 @@ export default function StaffDashboard({
         {tab === "qr" && managerAccess && <ManagerQrCodes />}
 
         {tab === "payments" && <StaffPayments />}
+
+        {tab === "receipts" && managerAccess && <StaffReceipts />}
+        {tab === "exceptions" && managerAccess && <StaffOrderExceptions />}
+        {tab === "reconciliation" && managerAccess && <StaffReconciliation />}
 
         {/* ORDERS TAB */}
         {tab === "orders" && (

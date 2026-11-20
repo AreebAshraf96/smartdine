@@ -7,9 +7,11 @@ export function getPublicSiteUrl(): string {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (configured) {
     try {
-      return new URL(configured).origin;
+      const url = new URL(configured);
+      if (url.protocol === "http:" || url.protocol === "https:") return url.origin;
+      console.warn("NEXT_PUBLIC_SITE_URL must use HTTP or HTTPS.");
     } catch {
-      console.warn("NEXT_PUBLIC_SITE_URL is not a valid URL:", configured);
+      console.warn("NEXT_PUBLIC_SITE_URL is not a valid URL.");
     }
   }
   return typeof window === "undefined" ? "" : window.location.origin;

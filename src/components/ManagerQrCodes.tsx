@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "@/lib/supabase";
 import { getPublicSiteUrl, isLocalOnly, tableQrUrl } from "@/lib/siteUrl";
@@ -96,7 +96,22 @@ export default function ManagerQrCodes() {
     () => tables.filter(t => t.restaurant_id === restaurantId).sort(compareTables),
     [tables, restaurantId]
   );
-  const activeCount = visibleTables.filter(t => t.is_active).length;
+  const printCards = useRef<HTMLDivElement>(null);
+  const activeTables = visibleTables.filter(t => t.is_active);
+  const activeCount = activeTables.length;
+  const canPrint = activeCount > 0 && activeTables.every(table => images[table.qr_code_id]);
+
+  async function printTables() {
+    const cards = printCards.current;
+    if (!canPrint || !cards) return;
+    const codes = Array.from(cards.querySelectorAll<HTMLImageElement>("article[data-active] img"));
+    try {
+      await Promise.all(codes.map(code => code.decode()));
+      if (codes.length === activeCount && codes.every(code => code.isConnected)) window.print();
+    } catch {
+      setError("Unable to load the QR codes for printing.");
+    }
+  }
 
   // Generate on-screen QR images locally; table links never leave the browser.
   useEffect(() => {
@@ -108,6 +123,28 @@ export default function ManagerQrCodes() {
       .catch(() => { if (!cancelled) setError("Unable to generate QR codes"); });
     return () => { cancelled = true; };
   }, [baseUrl, visibleTables]);
+
+  async function changeTable(action: "add" | "rename" | "toggle" | "remove", table?: Table) {
+    if (!restaurantId) return;
+    const label = action === "add" || action === "rename"
+      ? window.prompt("Table name or number", table ? String(table.table_number) : "")
+      : null;
+    if ((action === "add" || action === "rename") && !label?.trim()) return;
+    if (action === "remove" && !window.confirm("Remove this table and disable its QR code?")) return;
+
+    await run(async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Sign in again");
+      const response = await fetch("/api/staff/tables/manage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ action, restaurantId, tableId: table?.id, label, active: !table?.is_active }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Unable to save table");
+      setTables((await fetchTables()).tables);
+    }, "Table changes saved.");
+  }
 
   async function run(fn: () => Promise<unknown>, success: string) {
     setError(""); setMessage("");
@@ -132,7 +169,8 @@ export default function ManagerQrCodes() {
             {restaurants.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
         </label>}
-        <button type="button" disabled={!activeCount} onClick={() => window.print()} className="rounded bg-black px-4 py-2 text-white disabled:opacity-50">
+        <button type="button" disabled={!restaurantId} onClick={() => void changeTable("add")} className="rounded border bg-white px-4 py-2 disabled:opacity-50">Add table</button>
+        <button type="button" disabled={!canPrint} onClick={() => void printTables()} className="rounded bg-black px-4 py-2 text-white disabled:opacity-50">
           Print all ({activeCount})
         </button>
       </div>
@@ -143,11 +181,11 @@ export default function ManagerQrCodes() {
     {loading && <p className="print:hidden">Loading tables...</p>}
     {!loading && !error && !visibleTables.length && <p className="print:hidden text-gray-600">No tables found for this restaurant.</p>}
 
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 print:grid-cols-2 print:gap-6">
+    <div ref={printCards} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 print:grid-cols-2 print:gap-6">
       {visibleTables.map(table => {
         const url = tableQrUrl(baseUrl, table.qr_code_id);
         const label = String(table.table_number);
-        return <article key={table.id} className={`break-inside-avoid rounded-xl border bg-white p-4 text-center print:border-gray-400 ${table.is_active ? "" : "opacity-60 print:hidden"}`}>
+        return <article key={table.id} data-active={table.is_active || undefined} className={`break-inside-avoid rounded-xl border bg-white p-4 text-center print:border-gray-400 ${table.is_active ? "" : "opacity-60 print:hidden"}`}>
           <p className="hidden print:block text-sm font-medium">{restaurantName}</p>
           {images[table.qr_code_id]
             // eslint-disable-next-line @next/next/no-img-element -- generated data URL, next/image adds nothing here
@@ -158,6 +196,9 @@ export default function ManagerQrCodes() {
           {!table.is_active && <p className="mt-1 inline-block rounded bg-gray-200 px-2 py-0.5 text-xs font-semibold">Inactive</p>}
           <p className="mt-1 break-all font-mono text-[10px] text-gray-500">{url}</p>
           <div className="mt-3 flex flex-wrap justify-center gap-2 print:hidden">
+            <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => void changeTable("rename", table)}>Rename</button>
+            <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => void changeTable("toggle", table)}>{table.is_active ? "Deactivate" : "Activate"}</button>
+            <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => void changeTable("remove", table)}>Remove</button>
             <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => void run(() => downloadTablePng(url, label, restaurantName), `Downloaded Table ${label}`)}>Download PNG</button>
             <button type="button" className="rounded border px-3 py-1.5 text-sm" onClick={() => void run(() => navigator.clipboard.writeText(url), `Link for Table ${label} copied`)}>Copy link</button>
             <a className="rounded border px-3 py-1.5 text-sm" href={url} target="_blank" rel="noopener noreferrer">Open</a>

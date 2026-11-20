@@ -6,7 +6,7 @@ export type StaffRole = "manager" | "owner";
 export type StaffMembership = { restaurant_id: string; role: StaffRole };
 
 export async function authenticateStaff(request: Request): Promise<
-  | { ok: true; memberships: StaffMembership[] }
+  | { ok: true; memberships: StaffMembership[]; userId: string }
   | { ok: false; status: number; error: string }
 > {
   const authHeader = request.headers.get("authorization") ?? "";
@@ -26,7 +26,7 @@ export async function authenticateStaff(request: Request): Promise<
     (record.role === "owner" || record.role === "manager")
   );
   if (!memberships.length) return { ok: false, status: 403, error: "Only manager and owner accounts may access SmartDine staff" };
-  return { ok: true, memberships };
+  return { ok: true, memberships, userId: result.user.id };
 }
 
 // Old callers may pass 'waiter' or 'kitchen' views; never grant a third role.
