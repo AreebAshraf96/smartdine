@@ -11,8 +11,9 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import ManagerMenu from "@/components/ManagerMenu";
 import StaffPayments from "@/components/StaffPayments";
+import ManagerQrCodes from "@/components/ManagerQrCodes";
 
-type Tab = "orders" | "calls" | "stock" | "menu" | "payments";
+type Tab = "orders" | "calls" | "stock" | "menu" | "payments" | "qr";
 
 type Order = {
   id: string;
@@ -393,7 +394,7 @@ export default function StaffDashboard({
     <main className="min-h-screen bg-gray-50 p-4 text-gray-900 md:p-6">
       <div className="mx-auto max-w-5xl">
         {/* Header */}
-        <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-3 print:hidden">
           <div>
             <h1 className="text-2xl font-bold">
               SmartDine Restaurant Operations
@@ -440,7 +441,7 @@ export default function StaffDashboard({
         </header>
 
         {/* Navigation */}
-        <nav className="mb-6 flex flex-wrap gap-2">
+        <nav className="mb-6 flex flex-wrap gap-2 print:hidden">
           <button
             type="button"
             onClick={() => {
@@ -493,10 +494,11 @@ export default function StaffDashboard({
           </button>
         </nav>
 
-        {ownerAccess && <p className="mb-3"><a href="/staff/owner" className="inline-flex rounded-lg border bg-white px-4 py-2 text-sm font-semibold">Owner analytics & reports</a></p>}
-        <nav className="mb-4 flex flex-wrap gap-2">
+        {ownerAccess && <p className="mb-3 print:hidden"><a href="/staff/owner" className="inline-flex rounded-lg border bg-white px-4 py-2 text-sm font-semibold">Owner analytics & reports</a></p>}
+        <nav className="mb-4 flex flex-wrap gap-2 print:hidden">
           <button className={`rounded-lg px-4 py-2 ${tab === "payments" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("payments")}>Payments</button>
           {managerAccess && <button className={`rounded-lg px-4 py-2 ${tab === "menu" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("menu")}>Manage Menu</button>}
+          {managerAccess && <button className={`rounded-lg px-4 py-2 ${tab === "qr" ? "bg-black text-white" : "border bg-white"}`} onClick={() => setTab("qr")}>QR Codes</button>}
 
         </nav>
 
@@ -504,13 +506,15 @@ export default function StaffDashboard({
         {error && (
           <div
             role="alert"
-            className="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+            className="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 print:hidden"
           >
             {error}
           </div>
         )}
 
         {tab === "menu" && managerAccess && <ManagerMenu />}
+
+        {tab === "qr" && managerAccess && <ManagerQrCodes />}
 
         {tab === "payments" && <StaffPayments />}
 
