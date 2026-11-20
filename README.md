@@ -16,16 +16,25 @@ cd smartdine
 npm ci
 ```
 
-Create `.env.local` in the project root. Use the **same variable names your current Supabase client and admin modules expect**, and get the actual development values privately from your teammate. Depending on the code version these may include:
+Create `.env.local` in the project root and get the actual development values privately from your teammate:
 
 ```dotenv
-NEXT_PUBLIC_SUPABASE_URL=YOUR_DEV_PROJECT_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_DEV_PUBLIC_KEY
-SUPABASE_SERVICE_ROLE_KEY=YOUR_DEV_SERVER_SECRET
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_DEV_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY=YOUR_DEV_SECRET_KEY
 SMARTDINE_DEMO_PAYMENTS=true
+# Optional: address printed table QR codes point to (origin only)
+NEXT_PUBLIC_SITE_URL=http://192.168.x.x:3000
 ```
 
-**Important:** The example above is illustrative: check `src/lib/supabase.ts` and `src/lib/supabaseAdmin.ts` for the exact required names (e.g. publishable/secret key variants) before running. Keep `.env.local` private and never commit it. `SMARTDINE_DEMO_PAYMENTS=true` is for local testing only.
+These are the exact names read by `src/lib/supabase.ts`, `src/lib/supabaseAdmin.ts`, the payment route and the QR generator.
+
+- `NEXT_PUBLIC_SUPABASE_URL` is the project URL only. Do not add `/rest/v1/`.
+- The publishable key starts with `sb_publishable_` (a legacy anon key also works). The secret key starts with `sb_secret_` and must stay server-side.
+- `SMARTDINE_DEMO_PAYMENTS=true` enables simulated card payments. It is for local testing only and is ignored in production builds.
+- `NEXT_PUBLIC_SITE_URL` is optional. See [Generate table QR codes](#generate-table-qr-codes).
+
+Keep `.env.local` private and never commit it. Restart `npm run dev` after editing it.
 
 ```powershell
 npm run dev
@@ -69,6 +78,31 @@ The five QR UUIDs are **demo data**. They work only if the corresponding `restau
 4. Sign in at `/staff/login`. **Manager** can handle orders, cash approvals, waiter calls, stock and menu editing; **owner** can do all that plus view analytics.
 5. Mark an order **Preparing → Ready → Served**, then check customer tracking and feedback.
 6. In `/staff/owner`, check date and payment-method filters, cash/card transaction counts, totals, popular dishes and peak periods.
+
+## Generate table QR codes
+
+1. Sign in at `/staff/login` as a manager or owner and open `/staff/manager`.
+2. Open the **QR Codes** tab.
+3. Click **Download PNG** on a table for a single printable image, or **Print all** to print every active table. Choose "Save as PDF" in the print dialog to get a PDF.
+
+Inactive tables are shown but left out of **Print all**.
+
+Codes point to `NEXT_PUBLIC_SITE_URL`, or to the address the dashboard is open on if that is unset. A `localhost` address only works on your computer, and the page warns you when that's the case.
+
+### Test QR codes on a phone
+
+1. Run `ipconfig` and copy your Wi-Fi **IPv4 Address** (e.g. `192.168.0.136`).
+2. In `.env.local` set `NEXT_PUBLIC_SITE_URL=http://192.168.0.136:3000`.
+3. Start the server so other devices on the network can reach it:
+
+   ```powershell
+   npm run dev -- -H 0.0.0.0
+   ```
+
+   If Windows Firewall asks, allow Node.js on **private** networks only.
+4. Download a table's code and scan it with a phone on the same Wi-Fi. The menu should open for that table.
+
+Your network address can change. If phones stop connecting, run `ipconfig` again and update `.env.local`.
 
 ## Checks and collaboration
 
